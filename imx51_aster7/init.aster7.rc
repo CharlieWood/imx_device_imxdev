@@ -1,0 +1,76 @@
+on boot
+
+    # Set permission for IIM node
+    symlink /dev/mxc_iim /dev/mxc_mem
+
+    # 3D acceleration property
+    setprop debug.sf.showfps    0
+    setprop debug.sf.enable_hgl 1
+    setprop debug.egl.hw        1
+
+    # fsl omx graphic manager media framework property
+    setprop media.omxgm.enable-player 1
+    setprop media.omxgm.enable-scan 1
+
+    #Define the config for dual camera
+    setprop back_camera_name ov
+    setprop back_camera_orient 0
+
+    # Set OpenGLES version 
+    setprop ro.opengles.version 131072
+
+    # Disable UI output for second display during video playback
+    setprop ro.secfb.disable-overlay  0
+
+    # move from common init.rc
+    setprop wifi.interface wlan0
+
+    # GPS uart ttymxc1
+    chown system system /dev/ttymxc1
+    # GPS power control
+    chown system system /sys/devices/platform/gps-control.0/gps_control
+
+    # BT rfkill
+    chown bluetooth bluetooth /dev/rfkill
+    # BT uart ttymxc2
+    chown bluetooth bluetooth /dev/ttymxc2
+
+service init-device /system/bin/logwrapper /system/bin/sh /system/etc/init.sh
+    user root
+    oneshot
+
+service post-boot /system/bin/logwrapper /system/bin/sh /system/etc/init.post_boot.sh
+    user root
+    disabled
+    oneshot
+
+on property:init.svc.bootanim=stopped
+    start post-boot
+
+service dhcpcd /system/bin/logwrapper /system/bin/dhcpcd -d -B wlan0
+    disabled
+    oneshot
+
+service wpa_supplicant /system/bin/logwrapper /system/bin/wpa_supplicant \
+    -Dwext -iwlan0 -c/data/misc/wifi/wpa_supplicant.conf
+    user root
+    group wifi inet
+    socket wpa_wlan0 dgram 660 wifi wifi
+    oneshot
+
+service hci_qcomm_init /system/bin/log -t qcom-bluetooth -p i "hci_qcomm_init service requested"
+    user bluetooth
+    group bluetooth net_bt_admin
+    disabled
+    oneshot
+
+service hciattach /system/bin/logwrapper /system/bin/sh /system/etc/init.qcom.bt.sh
+    disabled
+    oneshot
+
+on fs
+# mount ext4 partitions
+    mount ext4 /dev/block/mmcblk2p2 /system
+    mount ext4 /dev/block/mmcblk2p2 /system ro remount
+    mount ext4 /dev/block/mmcblk2p5 /data nosuid nodev nodelalloc
+    mount ext4 /dev/block/mmcblk2p6 /cache nosuid nodev

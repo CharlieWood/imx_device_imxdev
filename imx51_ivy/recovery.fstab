@@ -1,0 +1,10 @@
+/system ext4 /dev/block/mmcblk2p2
+/data ext4 /dev/block/mmcblk2p5
+/cache ext4 /dev/block/mmcblk2p6
+
+# UBI support is under below:
+#/system ubifs /dev/ubi1_0
+#/data ubifs /dev/ubi1_2
+#/cache ubifs /dev/ubi1_1
+
+/sdcard vfat /dev/block/mmcblk2p1

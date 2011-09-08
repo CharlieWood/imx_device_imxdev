@@ -1,0 +1,101 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<glgps xmlns="http://www.glpals.com/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.glpals.com/ glconfig.xsd" >
+
+<!-- It is highly recommended to view/edit this file with syntax-highlighting 
+    editors such as notepad++ or vim. This way, one can easily distinguish 
+    comments and valid code.
+    
+    This file is a primary template for Linux-like platforms.
+-->
+
+<!-- HAL essentials: Serial port, log, NMEA, IRM, NVRAM, LTO -->
+<hal
+    acPortName="/dev/ttymxc1"
+    lBaudRate="115200"
+
+    cLogEnableInitState="true"
+    cLogEnabled="true"
+    acLogDirectory="/data/gps/log/"
+
+    acNmeaOutName="/data/gpspipe"
+
+    ctrlPipe="/data/gps/glgpsctrl"
+    acNvStoDir="/data/gps/"
+
+    ltoFileName="lto.dat"
+/>
+
+<!-- GPIO is essential for reliable host interface reset and power saving.
+    There are currently two mutually exclusive mechanisms (sysfs or rfkill) to 
+    GPIO control the REGPU or NSTANDBY pin on the GNSS chipset.
+-->
+
+<!-- GPIO sysfs (in most cases) -->
+<hal
+    gpioNStdbyPath="/sys/devices/platform/gps-control.0/gps_pwr_en"
+    gpioNResetPath="/sys/devices/platform/gps-control.0/gps_nrst"
+    gpioDelayMs="100"
+/>
+
+<!-- GPIO rfkill -->
+<!--hal
+    rfkillNStdby="gps"
+/-->
+
+<!--  (Re)aiding configuration options for LBS, SUPL (depending on type selected) -->
+<hal
+    ReAidingType="3"                // Re-aiding type (0-none, 1-SUPL, 2-LBS, 3-LBS and SUPL)
+    ReAidingRetryIntervalSec="20"   // Re-aiding retry interval in seconds.
+    ReAidingIntervalSec="1200"      // Re-aiding interval in seconds.
+/>
+
+<!-- Sensors: Valid on Android 2.3 or higher -->
+<hal
+    SensorsEnable="false"
+    SensorsMask="0F"
+    SensorsLog="true"
+    SensorsType="5"
+    SensorsMoEnable="true"
+    SensorsTurnEnable="false"
+    SensorsRawAcclGyroEnable="false"
+
+    SensorsStepEnable="false"
+    SensorsAcclInRunBiasCal="true"
+    SensorsEstBiasInWalking="true"
+    req_pos.acc="1000"
+/>
+
+<!-- Android: -->
+<hal
+    lcsApiSockName="/dev/socket/gps"
+/>
+
+<!----------------------------------------------------------------------------->
+<!-- GLL Engine: See glgpsapi.h for supported parameters -->
+<gll
+    LogPriMask="LOG_INFO"
+    LogFacMask="LOG_GLLAPI | LOG_NMEA"
+    FrqPlan="FRQ_PLAN_26MHZ_2PPM"
+    RfType="GL_RF_4751_DANUBE_EXT_LNA"
+    WarmStandbyTimeout1Seconds="0"
+    WarmStandbyTimeout2Seconds="0"
+/>
+
+<!-- Pulse-Per-Second (PPS) -->
+<gll
+    pps-enable="false"
+    pps-offset-ms="0"
+    pps-width-ns="100"
+/>
+
+<!----------------------------------------------------------------------------->
+<!-- List of jobs can be performed by the GPS controller    -->
+
+<!-- Periodic Position Fix using default settings -->
+<job id="Periodic">
+    <task>
+        <req_pos/>
+    </task>
+</job>
+
+</glgps>

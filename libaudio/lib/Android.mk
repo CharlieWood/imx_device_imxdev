@@ -3,12 +3,12 @@ ALSA_LIB_INCLUDE := external/alsa-lib/include
 HARDWARE_ADAPTER := $(LOCAL_PATH)/../hardware_adapter/inc 
 
 include $(CLEAR_VARS)
-$(warning Build the aster libaudio.so)
 
 # Common
 LOCAL_SHARED_LIBRARIES := \
 	libcutils \
 	libutils \
+	libhardware_legacy \
 	libasound \
 	libmedia \
 	libdl

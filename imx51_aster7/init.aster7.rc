@@ -25,16 +25,6 @@ on boot
     # move from common init.rc
     setprop wifi.interface wlan0
 
-    # GPS uart ttymxc1
-    chown system system /dev/ttymxc1
-    # GPS power control
-    chown system system /sys/devices/platform/gps-control.0/gps_control
-
-    # BT rfkill
-    chown bluetooth bluetooth /dev/rfkill
-    # BT uart ttymxc2
-    chown bluetooth bluetooth /dev/ttymxc2
-
 service init-device /system/bin/logwrapper /system/bin/sh /system/etc/init.sh
     user root
     oneshot

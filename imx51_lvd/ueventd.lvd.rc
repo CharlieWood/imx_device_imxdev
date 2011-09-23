@@ -34,3 +34,11 @@
 /sys/devices/platform/mxc_sdc_fb.1/graphics/fb*	mode 0660 system graphics
 /sys/devices/platform/mxc_dvfs_core.0 enable 0660 system system
 /sys/devices/platform/busfreq.0 enable 0660 system system
+# backlight
+/sys/devices/platform/pwm-backlight.0/backlight/pwm-backlight.0 brightness 0660 system system
+# bluetooth
+/sys/class/rfkill/rfkill0 state 0660 bluetooth bluetooth
+/sys/class/rfkill/rfkill0 type  0660 bluetooth bluetooth
+# gps
+/sys/devices/platform/gps-control.0 gps_pwr_en 0600 system system
+/sys/devices/platform/gps-control.0 gps_nrst   0600 system system

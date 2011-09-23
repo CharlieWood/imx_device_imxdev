@@ -40,3 +40,8 @@ PRODUCT_COPY_FILES += \
 # copy BCM4751 config file
 PRODUCT_COPY_FILES += \
 	$(DEVICE_CFG_PATH)/gpsconfig.xml:system/etc/gpsconfig.xml
+
+# touch idc config
+PRODUCT_COPY_FILES += \
+	$(DEVICE_CFG_PATH)/ft5x0x_ts.idc:system/usr/idc/ft5x0x_ts.idc \
+	$(DEVICE_CFG_PATH)/guitar_gt80x.idc:system/usr/idc/guitar_gt80x.idc

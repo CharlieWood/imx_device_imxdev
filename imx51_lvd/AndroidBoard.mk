@@ -44,3 +44,7 @@ PRODUCT_COPY_FILES += \
 # touch calibration
 PRODUCT_COPY_FILES += \
 	$(DEVICE_CFG_PATH)/init.calibrate.sh:system/etc/init.calibrate.sh \
+
+# touch idc config
+PRODUCT_COPY_FILES += \
+	$(DEVICE_CFG_PATH)/pixcir_ts.idc:system/usr/idc/pixcir_ts.idc

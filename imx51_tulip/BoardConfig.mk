@@ -22,8 +22,6 @@ WIFI_DRIVER_FW_AP_PATH      := "/system/vendor/firmware/fw_bcm4329_apsta.bin"
 WIFI_DRIVER_MODULE_ARG      := "firmware_path=/system/vendor/firmware/fw_bcm4329.bin nvram_path=/system/etc/wifi/nvram.txt iface_name=wlan"
 WIFI_DRIVER_MODULE_NAME     := "dhd"
 
-BCM4329_WIFI_MOD_CONFIG_NAME        := dhd-cdc-sdmmc-tulip-gpl-debug
-
 # Broadcom initialization utility
 BOARD_HAVE_BLUETOOTH_BCM := true
 

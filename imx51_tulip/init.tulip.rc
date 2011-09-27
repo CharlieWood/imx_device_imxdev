@@ -1,3 +1,29 @@
+on early-init
+    export EXTERNAL_STORAGE /mnt/sdcard
+    mkdir /mnt/sdcard 0000 system system
+    # for backwards compatibility
+    symlink /mnt/sdcard /sdcard
+
+
+on fs
+    # mount ext4 partitions
+    mount ext4 /dev/block/mmcblk2p2 /system wait ro
+    mount ext4 /dev/block/mmcblk2p5 /data wait noatime nosuid nodev
+    mount ext4 /dev/block/mmcblk2p6 /cache wait noatime nosuid nodev
+
+on post-fs-data
+    mkdir /data/misc/wifi 0770 wifi wifi
+    mkdir /data/misc/wifi/sockets 0770 wifi wifi
+    mkdir /data/misc/dhcp 0770 dhcp dhcp
+    chown dhcp dhcp /data/misc/dhcp
+
+    # we will remap this as /mnt/sdcard with the sdcard fuse tool
+    mkdir /data/media 0775 media_rw media_rw
+    chown media_rw media_rw /data/media
+
+    # Set indication (checked by vold) that we have finished this action
+    setprop vold.post_fs_data_done 1
+
 on boot
 
     # Set permission for IIM node
@@ -29,10 +55,12 @@ on boot
     write /sys/class/rfkill/rfkill0/state 0
 
 service init-device /system/bin/logwrapper /system/bin/sh /system/etc/init.sh
+    class main
     user root
     oneshot
 
 service post-boot /system/bin/logwrapper /system/bin/sh /system/etc/init.post_boot.sh
+    class main
     user root
     disabled
     oneshot
@@ -40,12 +68,14 @@ service post-boot /system/bin/logwrapper /system/bin/sh /system/etc/init.post_bo
 on property:init.svc.bootanim=stopped
     start post-boot
 
-service dhcpcd /system/bin/logwrapper /system/bin/dhcpcd -d -B wlan0
+service dhcpcd /system/bin/logwrapper /system/bin/dhcpcd -d -ABKL
+    class main
     disabled
     oneshot
 
 service wpa_supplicant /system/bin/logwrapper /system/bin/wpa_supplicant \
     -Dwext -iwlan0 -c/data/misc/wifi/wpa_supplicant.conf
+    class main
 #   we will start as root and wpa_supplicant will switch to user wifi
 #   after setting up the capabilities required for WEXT
 #   user wifi
@@ -56,8 +86,10 @@ service wpa_supplicant /system/bin/logwrapper /system/bin/wpa_supplicant \
     oneshot
 
 # Bluetooth hciattach tools
-service hciattach /system/bin/brcm_patchram_plus --baudrate 3000000 --enable_hci \
-    --enable_lpm --patchram "/system/etc/bluetooth/bcmpatchram.hcd" /dev/ttymxc2
+service hciattach /system/bin/brcm_patchram_plus --enable_hci --enable_lpm \
+    --baudrate 3000000 --patchram "/system/etc/bluetooth/bcmpatchram.hcd" --pcm_role slave \
+    --use_baudrate_for_download /dev/ttymxc2
+    class main
     user bluetooth
     group system bluetooth net_bt_admin misc
     oneshot
@@ -65,17 +97,12 @@ service hciattach /system/bin/brcm_patchram_plus --baudrate 3000000 --enable_hci
 
 #hardware GPS 
 service gpsd /system/bin/glgps -c /system/etc/gpsconfig.xml
-	user root
-	group root
+    class main
+    user root
+    group root
 
 # service modemd, control modem power by sim state
 service modemd /system/bin/modemd
-	user root
-	oneshot
-
-on fs
-# mount ext4 partitions
-    mount ext4 /dev/block/mmcblk2p2 /system
-    mount ext4 /dev/block/mmcblk2p2 /system ro remount
-    mount ext4 /dev/block/mmcblk2p5 /data nosuid nodev nodelalloc
-    mount ext4 /dev/block/mmcblk2p6 /cache nosuid nodev
+    class main
+    user root
+    oneshot

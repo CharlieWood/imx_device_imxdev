@@ -17,7 +17,6 @@ loglevel 3
     export ANDROID_ROOT /system
     export ANDROID_ASSETS /system/app
     export ANDROID_DATA /data
-    export EXTERNAL_STORAGE /mnt/sdcard
     export ASEC_MOUNTPOINT /mnt/asec
     export LOOP_MOUNTPOINT /mnt/obb
     export SHM_MOUNTPOINT /mnt/shm
@@ -36,11 +35,6 @@ loglevel 3
 # Right now vendor lives on the same filesystem as system,
 # but someday that may change.
     symlink /system/vendor /vendor
-
-    # create sdcard mountpoints
-    mkdir /mnt/sdcard 0000 system system
-    # Backwards Compat - XXX: Going away in G*
-    symlink /mnt/sdcard /sdcard
 
 # Create cgroup mount point for cpu accounting
     mkdir /acct
@@ -192,7 +186,7 @@ on post-fs-data
     # must uncomment this line, otherwise encrypted filesystems
     # won't work.
     # Set indication (checked by vold) that we have finished this action
-    setprop vold.post_fs_data_done 1
+    #setprop vold.post_fs_data_done 1
 
 on boot
 # basic network init

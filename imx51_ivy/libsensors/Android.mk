@@ -22,8 +22,7 @@ LOCAL_PRELINK_MODULE := false
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
 LOCAL_SHARED_LIBRARIES := liblog libcutils
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/../../common/include
-#LOCAL_SRC_FILES := HMSHardIronCal.c HMSHeading.c sensors.cpp
-LOCAL_SRC_FILES := HMSHardIronCal.c HMSHeading.c sensors.c
+LOCAL_SRC_FILES := AccelSensor.cpp SensorBase.cpp sensors.cpp InputEventReader.cpp
 LOCAL_MODULE := sensors.imx51_ivy
 LOCAL_MODULE_TAGS := optional
 

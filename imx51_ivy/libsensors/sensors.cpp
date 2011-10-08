@@ -1,5 +1,6 @@
 /*
- * Copyright (C) 2009 Bosch Sensortec GmbH
+ * Copyright (C) 2011 Freescale Semiconductor Inc.
+ * Copyright (C) 2008 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,728 +14,291 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#define LOG_TAG "Sensor"
-#define HMC5883
-#ifndef INFTIM
-#define INFTIM       -1
-#endif
 
+#define LOG_TAG "Sensors"
 
-#include <hardware/hardware.h>
 #include <hardware/sensors.h>
-
 #include <fcntl.h>
 #include <errno.h>
-#include <poll.h>
-#include <time.h>
-
-#include <cutils/log.h>
-#include <cutils/atomic.h>
-#include <stdio.h>
-
-#include <cutils/native_handle.h>
-
-#ifdef HMC5883
+#include <dirent.h>
 #include <math.h>
-extern "C"{
-#include <HMSHardIronCal.h>
-#include <HMSHeading.h>
-}
-#endif
+#include <poll.h>
+#include <pthread.h>
+#include <stdlib.h>
 
-#define NSEC_PER_SEC	1000000000L
+#include <linux/input.h>
 
-//#define DEBUG_SENSOR	1
+#include <utils/Atomic.h>
+#include <utils/Log.h>
 
-static inline int64_t timespec_to_ns(const struct timespec *ts)
-{
-	return ((int64_t) ts->tv_sec * NSEC_PER_SEC) + ts->tv_nsec;
-}
+#include "sensors.h"
 
-/*****************************************************************************/
-
-#define SENSOR_DATA_DEVICE "/dev/bma150"
-#ifdef HMC5883
-#define MSENSOR_DATA_DEVICE "/dev/hmc5883"
-#endif
-
-//#define SENSOR_DATA_DEVICE "/dev/bma120"
-//#define SENSOR_DATA_DEVICE "/dev/bmp085"
-//#define PRESSURER
-#define ACCELEROMETER
-//#define BMA120_SENSOR
-
-#define BMA150_SENSOR
-// Convert to Gs
-// FIXME!!!! The raw data is suppose to be +-2G with 8bit fraction
-// FIXME!!!! We are getting 7bit fraction
-#define CONVERT                     (GRAVITY_EARTH / 256)
-#define CONVERT_X                   -(CONVERT)
-#define CONVERT_Y                   -(CONVERT)
-#define CONVERT_Z                   (CONVERT)
-
-
-#define S_HANDLE_ACCELEROMETER		(1<<SENSOR_TYPE_ACCELEROMETER)
-#define S_HANDLE_PRESSURER 			(1<<SENSOR_TYPE_ACCELEROMETER)
-#ifdef HMC5883
-#define S_HANDLE_ORIENTATION		(1<<SENSOR_TYPE_ORIENTATION)
-#endif
-
-
-static int s_timeout = 400;
-
-static int s_device_open(const struct hw_module_t* module,
-                         const char* name,
-                         struct hw_device_t** device);
-
-static int s_get_sensors_list (struct sensors_module_t* module,
-                               struct sensor_t const**);
-
-struct sensors_control_context_t {
-    struct sensors_control_device_t device;
-    /* our private state goes below here */
-    int fd;
-#ifdef HMC5883
-    int fd1;
-#endif
-};
-
-struct sensors_data_context_t {
-    struct sensors_data_device_t device;
-    /* our private state goes below here */
-    int fd;
-#ifdef HMC5883
-    int fd1;
-#endif
-
-};
-
-static struct hw_module_methods_t s_module_methods = {
-    open: s_device_open
-};
-
-
-extern "C" const struct sensors_module_t HAL_MODULE_INFO_SYM = {
-   common: {
-       tag: HARDWARE_MODULE_TAG,
-        version_major: 1,
-        version_minor: 0,
-        id: SENSORS_HARDWARE_MODULE_ID,
-        name: "OMAP Zoom sensor module",
-        author: "Bosch",
-        methods: &s_module_methods,
-        dso:NULL,
-        reserved: {},
-
-    },
-
-    get_sensors_list :s_get_sensors_list,
-};
-
-
-static struct sensor_t sensors_list[] = {
-#ifdef ACCELEROMETER
-    {
-        name: "BMA150 Acclerometer",
-        vendor: "Bosch",
-        version: 1,
-        handle: S_HANDLE_ACCELEROMETER,
-        type: SENSOR_TYPE_ACCELEROMETER,
-        maxRange: 1.0,   /* ???? */
-        resolution: 1.0, /* ???? */
-        power: 20,      /* ???? */
-    },
-#endif
-
-#ifdef PRESSURER
-	{
-        name: "BMP085 Pressure",
-        vendor: "Bosch",
-        version: 1,
-        handle: SENSORS_TEMPERATURE_HANDLE,
-        type: SENSOR_TYPE_TEMPERATURE,
-        maxRange: 1.0,   /* ???? */
-        resolution: 1.0, /* ???? */
-        power: 20,      /* ???? */
-    },
-#endif
-#ifdef HMC5883
-    {
-        name: "HMC5883 Magnetic",
-        vendor: "Honeywell",
-        version: 1,
-        handle: S_HANDLE_ORIENTATION,
-        type: SENSOR_TYPE_ORIENTATION,
-        maxRange: 1.0,   /* ???? */
-        resolution: 1.0, /* ???? */
-        power: 20,      /* ???? */
-    },
-#endif
-};
-
-static int sensors_list_size = sizeof(sensors_list) / sizeof(sensors_list[0]);
+//#include "LightSensor.h"
+#include "AccelSensor.h"
+//#include "MagSensor.h"
 
 /*****************************************************************************/
 
-static int s_dev_control_close (struct hw_device_t* device)
-{
-    struct sensors_control_context_t *dev;
-    dev = (struct sensors_control_context_t *)device;
-	printf("%s\n",__FUNCTION__);
-    if (dev->fd >= 0) close (dev->fd);
-#ifdef HMC5883
-    if (dev->fd1 >= 0) close (dev->fd1);
-#endif
-    free (dev);
-    return 0;
-}
+#define DELAY_OUT_TIME 0x7FFFFFFF
 
-static native_handle_t* s_open_data_source (struct sensors_control_device_t *device)
-{
-    struct sensors_control_context_t *dev;
-    native_handle_t * handle;
-    int fd;
-    dev = (struct sensors_control_context_t *)device;
-    fd = open (SENSOR_DATA_DEVICE, O_RDONLY);
-    if (fd >= 0) dev->fd = dup(fd);
-    LOGD ("Open Data source: %d, %d\n", fd, errno);
-	printf("%s\n",__FUNCTION__);
-    handle = native_handle_create(2,0);
-    handle->data[0] = fd;
-#ifdef HMC5883
-	int fd1;
-    fd1 = open (MSENSOR_DATA_DEVICE, O_RDONLY);
-    if (fd1 >= 0) dev->fd1 = dup(fd1);
-    LOGD ("Open Data source: %d, %d\n", fd1, errno);
-	printf("%s\n",__FUNCTION__);
-    handle->data[1] = fd1;
-#endif
-    return handle;
-}
+#define LIGHT_SENSOR_POLLTIME    2000000000
 
-static int s_activate (struct sensors_control_device_t *device,
-            int handle,
-            int enabled)
-{
-    struct sensors_control_context_t *dev;
-    dev = (struct sensors_control_context_t *)device;
-	printf("%s\n",__FUNCTION__);
-    // ioctl here?
-    return 0;
-}
+#define SENSORS_ACCELERATION     (1<<ID_A)
+#define SENSORS_MAGNETIC_FIELD   (1<<ID_M)
+#define SENSORS_ORIENTATION      (1<<ID_O)
+#define SENSORS_LIGHT            (1<<ID_L)
+#define SENSORS_PROXIMITY        (1<<ID_P)
+#define SENSORS_GYROSCOPE        (1<<ID_GY)
 
-static int s_set_delay (struct sensors_control_device_t *device,
-             int32_t ms)
-{
-    struct sensors_control_context_t *dev;
-    dev = (struct sensors_control_context_t *)device;
-    s_timeout = ms;
-    LOGI("set delay to %d", ms);
-	printf("%s\n",__FUNCTION__);
-    // ioctl here?
-    return 0;
-}
+#define SENSORS_ACCELERATION_HANDLE     0
+#define SENSORS_MAGNETIC_FIELD_HANDLE   1
+#define SENSORS_ORIENTATION_HANDLE      2
+#define SENSORS_LIGHT_HANDLE            3
+#define SENSORS_PROXIMITY_HANDLE        4
+#define SENSORS_GYROSCOPE_HANDLE        5
 
-static int s_wake (struct sensors_control_device_t *device)
-{
-    struct sensors_control_context_t *dev;
-    dev = (struct sensors_control_context_t *)device;
-	printf("%s\n",__FUNCTION__);
-    // ioctl here?
-    return 0;
-}
 
 /*****************************************************************************/
+static const struct sensor_t sSensorList[] = {
+        { "kxtf9 3-axis Accelerometer",
+                "Kionix",
+                1, SENSORS_HANDLE_BASE+ID_A,
+                SENSOR_TYPE_ACCELEROMETER, 4.0f*9.81f, (4.0f*9.81f)/256.0f, 0.2f, 0, { } },
+//        { "HMC5883 Magnetic field sensor",
+//                "Honeywell",
+//                1, SENSORS_HANDLE_BASE+ID_M,
+//                SENSOR_TYPE_MAGNETIC_FIELD, 2000.0f, 1.0f/16.0f, 6.8f, 0, { } }, 
+//        { "HMC5883 Magnetic field sensor",
+//                "Honeywell",
+//                1, SENSORS_HANDLE_BASE+ID_O,
+//                SENSOR_TYPE_ORIENTATION, 360.0f, 1.0f, 7.0f, 0, { } },
+        /*{ "ISL29018 Light sensor",
+                "Intersil",
+                1, SENSORS_HANDLE_BASE+ID_L,
+                SENSOR_TYPE_LIGHT, 10240.0f, 1.0f, 0.5f, 0, { } },
+        */
+};
 
-static int s_dev_data_close (struct hw_device_t* device)
+static int open_sensors(const struct hw_module_t* module, const char* id,
+                        struct hw_device_t** device);
+
+
+static int sensors__get_sensors_list(struct sensors_module_t* module,
+                                     struct sensor_t const** list)
 {
-    struct sensors_data_context_t *dev;
-    dev = (struct sensors_data_context_t *)device;
-    // ioctl here to quiet device?
-	printf("%s\n",__FUNCTION__);
-    free (dev);
-    return 0;
+        *list = sSensorList;
+        return ARRAY_SIZE(sSensorList);
 }
 
-static int s_data_open (struct sensors_data_device_t *device,
-             native_handle_t *handle)
-{
-    struct sensors_data_context_t *dev;
-    dev = (struct sensors_data_context_t *)device;
-    dev->fd = dup(handle->data[0]);
-#ifdef HMC5883
-    dev->fd1 = dup(handle->data[1]);
-#endif
-    native_handle_close(handle);
-    native_handle_delete(handle);
-	printf("%s\n",__FUNCTION__);
-    return 0;
-}
+static struct hw_module_methods_t sensors_module_methods = {
+        open: open_sensors
+};
 
-#ifdef HMC5883
-#define PI 						3.1415926535897932f
-#ifndef GRAVITY_EARTH
-#define	GRAVITY_EARTH           9.80665f
-#endif
-#define GRAVITY_SENSITIVITY		0.017f
-#define GRAVITY_PARAM			0.166713f /*(GRAVITY_EARTH*GRAVITY_SENSITIVITY)*/
-#define COMPASS_CALIBRATE_FILE	"/data/compass_calibration"
-#define COMPASS_THRESHOLD		12.0f
-static int compass_data[3];
-static float orietation_data[3];
-static float sensor_angle[3];
+struct sensors_module_t HAL_MODULE_INFO_SYM = {
+        common: {
+                tag: HARDWARE_MODULE_TAG,
+                version_major: 1,
+                version_minor: 1,
+                id: SENSORS_HARDWARE_MODULE_ID,
+                name: "Freescale Sensor module",
+                author: "Freescale Semiconductor Inc.",
+                methods: &sensors_module_methods,
+        },
+        get_sensors_list: sensors__get_sensors_list,
+};
 
+struct sensors_poll_context_t {
+    struct sensors_poll_device_t device; // must be first
 
+        sensors_poll_context_t();
+        ~sensors_poll_context_t();
+    int activate(int handle, int enabled);
+    int setDelay(int handle, int64_t ns);
+    int pollEvents(sensors_event_t* data, int count);
 
-unsigned short	S_Mx_Offset			= 0x773;
-unsigned short	S_My_Offset 		= 0x633;
-unsigned short	S_Mx_Sensitivity	= 0xb95;
-unsigned short	S_My_Sensitivity	= 0x15e8;
-short 			S_Mx_Min			= 0x26;
-short			S_My_Min			= 0xffd9;
-static int compass_device_exist		= -1; //0:not exist, 1:exist
-static int calibration_file_st_mtime = 0;
-static int sensor_type = 0;
-static int poll_cnt = 0;
+private:
+    enum {
+        accel = 0,
+//        mag,
+//        orient,
+        numSensorDrivers,
+        numFds,
+    };
 
-static int Calculate_Sensor_Angle(void)
-{
-	float ipitch, iroll;
-	float tmp = 0;
-	float x, y, z;
+    static const size_t wake = numFds - 1;
+    static const char WAKE_MESSAGE = 'W';
+    struct pollfd mPollFds[numFds];
+    int mWritePipeFd;
+    SensorBase* mSensors[numSensorDrivers];
 
-	x = orietation_data[0];
-	y = orietation_data[1];
-	z = orietation_data[2];
-	
-	//ipitch
-	if (y != 0)
-	{
-		tmp = z/y;
-		ipitch = atan(tmp)*180/PI;
-	}else
-		ipitch = (z>0)?90:-90;
-	
-	if (z <= 0)
-	{
-		if (y >= 0)
-			ipitch = -90 + ipitch;
-		else
-			ipitch = ipitch + 90;
-	}else
-	{
-		if (y >= 0)
-			ipitch = ipitch - 90;
-		else
-			ipitch = 90 + ipitch;
-	}
-	sensor_angle[1] = ((int)(ipitch*10 + 0.5))/10.0;
-
-	//roll
-	// if (x!=0)
-	// {
-	// 	tmp = x/z;
-	// 	iroll = atan(tmp)*180/PI;
-	// }else
-	// 	iroll = (z>0)?90:-90;
-	// if (z <= 0)
-	// {
-	// 	if (x >= 0)
-	// 		{
-	// 		iroll = -90 + iroll;
-	// 		}
-	// 	else
-	// 		iroll = iroll + 90;
-	// }else
-	// {
-	// 	if (x >= 0)
-	// 		iroll = iroll - 90;
-	// 	else
-	// 		iroll = 90 + iroll ;
-	// }
-	if (x!=0)
-	{
-		tmp = x/z;
-		iroll = atan(tmp)*180/PI;
-	}else
-		iroll = (z>0)?90:-90;
-	if (z <= 0)
-	{
-		if (iroll <= 0){
-				iroll = 90 + iroll;
-		}
-		else{
-			iroll = iroll - 90;
-		}
-	}else
-	{
-		if (iroll <= 0){
-			//iroll = -180 - iroll;
-			iroll = iroll;
-		}
-		else{
-			//iroll = iroll - 180;
-			iroll = iroll;
-		}
-	}
-
-	//end
-	sensor_angle[2] = ((int)(iroll*10 + 0.5))/10.0;
-
-	//	DBG("cruise  Calculate_Sensor_Angle  : ******** [Y]:%f [Z]:%f ******\n", sensor_angle[1], sensor_angle[2]);
-	return 0;
-}
-
-#endif
-static int s_data_close (struct sensors_data_device_t *device)
-{
-    struct sensors_data_context_t *dev;
-    dev = (struct sensors_data_context_t *)device;
-    if (dev->fd >= 0) close(dev->fd);
-    dev->fd = -1;
-#ifdef HMC5883
-    if (dev->fd1 >= 0) close(dev->fd1);
-    dev->fd1 = -1;
-#endif
-	printf("%s\n",__FUNCTION__);
-    return 0;
-}
-#ifdef HMC5883
-/*FIXME*/
-static	int m = 1;
-static int s_poll (struct sensors_data_device_t *device,
-              sensors_data_t* data)
-{
-    struct sensors_data_context_t *dev;
-	struct pollfd fds[2];
-    static int count = 0;
-    int magX = 0; int magY = 0; int magZ = 0;
-	int offsets[3] = {0};
-	int iResult;
-	double dHeading = 0;
-    float accForward;
-    float accLeft;
-	struct {
-		short x;
-		short y;
-		short z;
-	} rawData;
-
-	struct {
-		short x;
-		short y;
-		short z;
-	} mrawData;
-
-	//LOGE("in Sensor poll Sensortype is :%d\n",data->sensor);
-
-
-	//printf("%s\n",__FUNCTION__);
-    dev = (struct sensors_data_context_t *)device;
-    if (dev->fd < 0)
-        return 0;
-    if (dev->fd1 < 0)
-        return 0;
-
-	fds[0] =  {fd: dev->fd, events: POLLIN, revents: 0};
-	fds[1] =  {fd: dev->fd1, events: POLLIN, revents: 0};
-	//    pollfd pfd = {fd: dev->fd, events: POLLIN, revents: 0};
-
-	//    int err = poll (&pfd, 1, s_timeout);
-	int err = poll (fds, 2,INFTIM);
-	
-    if (err < 0)
-        return err;
-    if (err == 0)
-        return -EWOULDBLOCK;
-
-    // FIXME!!!!!
-    // The device currently always has data available and so
-    // it can eat up the CPU!!!
-    usleep(50000);	// 50ms
-    m++;
-	//if((fds[0].revents & POLLIN) == POLLIN){
-	if(((fds[0].revents & POLLIN) == POLLIN) && (m % 2 == 1)){
-
-		err = read (dev->fd, &rawData, sizeof(rawData));
-		if (err < 0)
-			return err;
-
-		struct timespec t;
-		clock_gettime(CLOCK_REALTIME, &t);
-
-		data->time = timespec_to_ns(&t);
-		data->sensor = SENSOR_TYPE_ACCELEROMETER;
-		data->acceleration.status = SENSOR_STATUS_ACCURACY_HIGH;
-		data->acceleration.x = rawData.y * CONVERT_X;
-		data->acceleration.y = -rawData.x * CONVERT_Y;
-		data->acceleration.z = -rawData.z * CONVERT_Z;
-
-
-		//#ifdef DEBUG_SENSOR
-		#if 0
-		LOGE("Sensor data: t x,y,z: %d %f, %f, %f\n",
-			 (int)(data->time / NSEC_PER_SEC),
-			 data->acceleration.x,
-			 data->acceleration.y,
-			 data->acceleration.z);
-#endif
-		return S_HANDLE_ACCELEROMETER;
-
-	}
-	//=====================================================================================
-	//	LOGE("before MAG Sensor poll:\n");
-	//if((fds[1].revents & POLLIN) == POLLIN){	LOGE("in MAG Sensor poll:\n");
-	if(((fds[1].revents & POLLIN) == POLLIN) && (m % 2 == 0)){
-
-		 read (dev->fd, &rawData, sizeof(rawData));
-		 read (dev->fd1, &mrawData, sizeof(mrawData));
-
-		// LOGE("gSensor1 data:  x,y,z:  %d, %d, %d\n",                
-		// 	 rawData.x,
-		// 	 rawData.y,
-		// 	 rawData.z);
-
-
-		// LOGE("mSensor1 data:  x,y,z:  %d, %d, %d\n",                
-		// 	 mrawData.x,
-		// 	 mrawData.y,
-		// 	 mrawData.z);
-
-		if (err < 0){
-			return err;
-		}
-
-		orietation_data[0] = rawData.x;
-		orietation_data[1] = rawData.y;
-		orietation_data[2] = rawData.z;
-
-		compass_data[0] = mrawData.x;
-		compass_data[1] = mrawData.y;
-		compass_data[2] = mrawData.z;
-
-       magX = compass_data[0];
-       magY = compass_data[1];
-       magZ = compass_data[2];
-
-	   count++;
-       if (count < 120){
-       CollectDataItem(magX, magY, magZ);
-       //LOGE("CollectData.\n");
-	   }
-
-       iResult = Calibrate(&offsets[0]);
-       // Elsewhere in the application, getting magnetic data and correcting out the
-       // hard iron disturbances 
-       magX -= offsets[0];
-       magY -= offsets[1];
-       magZ -= offsets[2];                                             
-       //Magnetic field data is now ready to be used
-	   dHeading = Heading(-magX,magY,magZ,accForward ,accLeft);
-
-       // dHeading = atan2(magY ,magX);//FABE
-	   // dHeading = dHeading*180/PI;//FABE
-	   //LOGE("dHeading=%f.\n",dHeading);                                
-       if (dHeading >0)
-       {
-       // Use the Heading Value
-       //LOGE("dHeading= %lf.\n",dHeading);
-       data->orientation.x = dHeading;
-       //LOGE("data->orientation.x= %f.\n",data->orientation.x);
-       }
-
-       Calculate_Sensor_Angle();
-	   data->sensor = SENSOR_TYPE_ORIENTATION;
-       data->orientation.y = sensor_angle[1];
-       data->orientation.z = sensor_angle[2];
-	   //       DBG("[cruise] Orientation  ######### x:%f y:%f z:%f #########\n", data->orientation.x,
-	   //       data->orientation.y, data->orientation.z);
-	   // LOGE("data->orientation.x= %f.\n",data->orientation.x);
-	   // LOGE("data->orientation.y= %f.\n",data->orientation.y);
-	   // LOGE("data->orientation.z= %f.\n",data->orientation.z);
-	   // LOGE("sensor_type\n",sensor_type);
-
-		// struct timespec t;
-		// clock_gettime(CLOCK_REALTIME, &t);
-
-		// data->time = timespec_to_ns(&t);
-		// data->sensor = SENSOR_TYPE_MAGNETIC_FIELD;
-		// data->acceleration.status = SENSOR_STATUS_ACCURACY_HIGH;
-		// data->acceleration.x = rawData.y * CONVERT_X;
-		// data->acceleration.y = -rawData.x * CONVERT_Y;
-		// data->acceleration.z = -rawData.z * CONVERT_Z;
-
-#ifdef DEBUG_SENSOR
-		LOGI("Sensor data: t x,y,x: %d %f, %f, %f\n",
-			 (int)(data->time / NSEC_PER_SEC),
-			 data->acceleration.x,
-			 data->acceleration.y,
-			 data->acceleration.z);
-#endif
-		return S_HANDLE_ORIENTATION;
-	}
-		return err;
-}
-#else
-static int s_poll (struct sensors_data_device_t *device,
-              sensors_data_t* data)
-{
-    struct sensors_data_context_t *dev;
-	//printf("%s\n",__FUNCTION__);
-    dev = (struct sensors_data_context_t *)device;
-
-    if (dev->fd < 0)
-        return 0;
-    pollfd pfd = {fd: dev->fd, events: POLLIN, revents: 0};
-	//    int err = poll (&pfd, 1, s_timeout);
-	int err = poll (&pfd, 1, INFTIM);
-    if (err < 0)
-        return err;
-    if (err == 0)
-        return -EWOULDBLOCK;
-
-    // FIXME!!!!!
-    // The device currently always has data available and so
-    // it can eat up the CPU!!!
-    usleep(50000);	// 50ms
-
-#ifdef  ACCELEROMETER
-#ifdef	BMA150_SENSOR
-    struct {
-        short x;
-        short y;
-        short z;
-    } rawData;
-#endif
-
-#ifdef BMA120_SENSOR
-	struct {
-        signed char x;
-        signed char y;
-        signed char z;
-    } rawData;
-#endif
-
-	if((pfd.revents & POLLIN) == POLLIN){
-		err = read (dev->fd, &rawData, sizeof(rawData));
-	}
-    if (err < 0)
-        return err;
-
-    struct timespec t;
-    clock_gettime(CLOCK_REALTIME, &t);
-
-    data->time = timespec_to_ns(&t);
-    data->sensor = SENSOR_TYPE_ACCELEROMETER;
-    data->acceleration.status = SENSOR_STATUS_ACCURACY_HIGH;
-    data->acceleration.x = rawData.y * CONVERT_X;
-    data->acceleration.y = -rawData.x * CONVERT_Y;
-    data->acceleration.z = -rawData.z * CONVERT_Z;
-
-#ifdef DEBUG_SENSOR
-    LOGI("Sensor data: t x,y,x: %d %f, %f, %f\n",
-                (int)(data->time / NSEC_PER_SEC),
-                data->acceleration.x,
-                data->acceleration.y,
-                data->acceleration.z);
-#endif
-    return S_HANDLE_ACCELEROMETER;
-#endif
-
-#ifdef PRESSURER
-	struct{
-		short	temperature;
-		long	pressure;
-	}rawData;
-	err = read(dev->fd, &rawData, sizeof(rawData));
-	if(err < 0)
-		return err;
-
-	struct timespec t;
-    clock_gettime(CLOCK_REALTIME, &t);
-
-    data->time = timespec_to_ns(&t);
-    data->sensor = SENSOR_TYPE_ACCELEROMETER;
-
-    data->vector.x = -rawData.temperature;
-    data->vector.y = -rawData.pressure;
-    data->vector.z = 0;
-	LOGD("Sensor data: t x,y,x: %d %f, %f, %f\n",
-                (int)(data->time / NSEC_PER_SEC),
-                data->vector.x,
-                data->vector.y,
-                data->vector.z);
-	return S_HANDLE_PRESSURER;
-#endif
-}
-#endif
-
-/*****************************************************************************/
-
-static int s_get_sensors_list (struct sensors_module_t* module,
-                    struct sensor_t const** list)
-{
-    *list = sensors_list;
-	printf("%s\n",__FUNCTION__);
-    return sensors_list_size;
-}
-
-/*****************************************************************************/
-
-static int s_device_open(const struct hw_module_t* module,
-              const char* name,
-              struct hw_device_t** device)
-{
-    int status = -EINVAL;
-	printf("%s\n",__FUNCTION__);
-    if (!strcmp(name, SENSORS_HARDWARE_CONTROL)) {
-        sensors_control_context_t *dev;
-        dev = (sensors_control_context_t *)malloc(sizeof(*dev));
-        if (! dev) return status;
-
-        /* initialize our state here */
-        memset(dev, 0, sizeof(*dev));
-
-        /* initialize the procs */
-        dev->device.common.tag = HARDWARE_DEVICE_TAG;
-        dev->device.common.version = 0;
-        dev->device.common.module = (struct hw_module_t *)module;
-        dev->device.common.close = s_dev_control_close;
-
-        dev->device.open_data_source = s_open_data_source;
-        dev->device.activate = s_activate;
-        dev->device.set_delay = s_set_delay;
-        dev->device.wake = s_wake;
-
-        *device = &dev->device.common;
-        status = 0;
-		printf("%d\n",__LINE__);
-    } else if (!strcmp(name, SENSORS_HARDWARE_DATA)) {
-        sensors_data_context_t *dev;
-        dev = (sensors_data_context_t *)malloc(sizeof(*dev));
-        if (! dev) return status;
-
-        /* initialize our state here */
-        memset(dev, 0, sizeof(*dev));
-
-        /* initialize the procs */
-        dev->device.common.tag = HARDWARE_DEVICE_TAG;
-        dev->device.common.version = 0;
-        dev->device.common.module = (struct hw_module_t *)module;
-        dev->device.common.close = s_dev_data_close;
-
-        dev->device.data_open = s_data_open;
-        dev->device.data_close = s_data_close;
-        dev->device.poll = s_poll;
-        dev->fd = -1;
-        dev->fd1 = -1;
-
-
-        *device = &dev->device.common;
-        status = 0;
-		printf("%d\n",__LINE__);
+    int handleToDriver(int handle) const {
+        switch (handle) {
+            case ID_A:
+                return accel;
+//            case ID_M:
+//            //case ID_O:
+//                return mag;
+//            case ID_O:
+//                return orient;
+			default:
+        		return -EINVAL;
+        }
     }
-    return status;
+};
+
+/*****************************************************************************/
+
+sensors_poll_context_t::sensors_poll_context_t()
+{
+    mSensors[accel] = new AccelSensor();
+    mPollFds[accel].fd = mSensors[accel]->getFd();
+    mPollFds[accel].events = POLLIN;
+    mPollFds[accel].revents = 0;
+
+    //mSensors[mag] = new MagSensor();
+    //mPollFds[mag].fd = mSensors[mag]->getFd();
+    //mPollFds[mag].events = POLLIN;
+    //mPollFds[mag].revents = 0;
+
+    //mSensors[orient] = new OrientSensor();
+    //mPollFds[orient].fd = mSensors[orient]->getFd();
+    //mPollFds[orient].events = POLLIN;
+    //mPollFds[orient].revents = 0;
+
+    int wakeFds[2];
+    int result = pipe(wakeFds);
+    LOGE_IF(result<0, "error creating wake pipe (%s)", strerror(errno));
+    fcntl(wakeFds[0], F_SETFL, O_NONBLOCK);
+    fcntl(wakeFds[1], F_SETFL, O_NONBLOCK);
+    mWritePipeFd = wakeFds[1];
+
+    mPollFds[wake].fd = wakeFds[0];
+    mPollFds[wake].events = POLLIN;
+    mPollFds[wake].revents = 0;
 }
 
+sensors_poll_context_t::~sensors_poll_context_t() {
+    for (int i=0 ; i<numSensorDrivers ; i++) {
+        delete mSensors[i];
+    }
+    close(mPollFds[wake].fd);
+    close(mWritePipeFd);
+}
 
+int sensors_poll_context_t::activate(int handle, int enabled) {
+    int index = handleToDriver(handle);
+    if (index < 0) return index;
+    int err =  mSensors[index]->enable(handle, enabled);
+    if (enabled && !err) {
+        const char wakeMessage(WAKE_MESSAGE);
+        int result = write(mWritePipeFd, &wakeMessage, 1);
+        LOGE_IF(result<0, "error sending wake message (%s)", strerror(errno));
+    }
+    return err;
+}
+
+int sensors_poll_context_t::setDelay(int handle, int64_t ns) {
+
+    int index = handleToDriver(handle);
+    if (index < 0) return index;
+    return mSensors[index]->setDelay(handle, ns);
+}
+
+int sensors_poll_context_t::pollEvents(sensors_event_t* data, int count)
+{
+    int nbEvents = 0;
+    int n = 0;
+
+    do {
+        // see if we have some leftover from the last poll()
+        for (int i=0 ; count && i<numSensorDrivers ; i++) {
+            SensorBase* const sensor(mSensors[i]);
+
+           if ((mPollFds[i].revents & POLLIN) || (sensor->hasPendingEvents())) {
+                int nb = sensor->readEvents(data, count);
+                if (nb < count) {
+                    // no more data for this sensor
+                    mPollFds[i].revents = 0;
+                }
+                count -= nb;
+                nbEvents += nb;
+                data += nb;
+            }
+        }
+
+        if (count) {
+            // we still have some room, so try to see if we can get
+            // some events immediately or just wait if we don't have
+            // anything to return
+            n = poll(mPollFds, numFds, nbEvents ? 0 : -1);
+            if (n<0) {
+                LOGE("poll() failed (%s)", strerror(errno));
+                return -errno;
+            }
+            if (mPollFds[wake].revents & POLLIN) {
+                char msg;
+                int result = read(mPollFds[wake].fd, &msg, 1);
+                LOGE_IF(result<0, "error reading from wake pipe (%s)", strerror(errno));
+                LOGE_IF(msg != WAKE_MESSAGE, "unknown message on wake queue (0x%02x)", int(msg));
+                mPollFds[wake].revents = 0;
+            }
+        }
+        // if we have events and space, go read them
+    } while (n && count);
+
+    return nbEvents;
+}
+
+/*****************************************************************************/
+
+static int poll__close(struct hw_device_t *dev)
+{
+    sensors_poll_context_t *ctx = (sensors_poll_context_t *)dev;
+    if (ctx) {
+        delete ctx;
+    }
+    return 0;
+}
+
+static int poll__activate(struct sensors_poll_device_t *dev,
+        int handle, int enabled) {
+    sensors_poll_context_t *ctx = (sensors_poll_context_t *)dev;
+    return ctx->activate(handle, enabled);
+}
+
+static int poll__setDelay(struct sensors_poll_device_t *dev,
+        int handle, int64_t ns) {
+    sensors_poll_context_t *ctx = (sensors_poll_context_t *)dev;
+    return ctx->setDelay(handle, ns);
+}
+
+static int poll__poll(struct sensors_poll_device_t *dev,
+        sensors_event_t* data, int count) {
+    sensors_poll_context_t *ctx = (sensors_poll_context_t *)dev;
+    return ctx->pollEvents(data, count);
+}
+
+/*****************************************************************************/
+
+/** Open a new instance of a sensor device using name */
+static int open_sensors(const struct hw_module_t* module, const char* id,
+                        struct hw_device_t** device)
+{
+        int status = -EINVAL;
+        sensors_poll_context_t *dev = new sensors_poll_context_t();
+
+        memset(&dev->device, 0, sizeof(sensors_poll_device_t));
+
+        dev->device.common.tag = HARDWARE_DEVICE_TAG;
+        dev->device.common.version  = 0;
+        dev->device.common.module   = const_cast<hw_module_t*>(module);
+        dev->device.common.close    = poll__close;
+        dev->device.activate        = poll__activate;
+        dev->device.setDelay        = poll__setDelay;
+        dev->device.poll            = poll__poll;
+
+        *device = &dev->device.common;
+        status = 0;
+
+        return status;
+}

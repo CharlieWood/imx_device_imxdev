@@ -6,6 +6,8 @@ $(call inherit-product, device/imxdev/imx5x/imx5x.mk)
 
 PRODUCT_PACKAGES += \
 	glgps gps.imx5x.so			\
+	lights.imx51_tulip			\
+	sensors.imx51_tulip
 
 # Overrides
 PRODUCT_NAME := tulip

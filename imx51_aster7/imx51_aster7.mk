@@ -3,6 +3,10 @@
 
 $(call inherit-product, device/imxdev/imx5x/imx5x.mk)
 
+PRODUCT_PACKAGES += \
+	lights.imx51_aster7			\
+	sensors.imx51_aster7
+
 # Overrides
 PRODUCT_NAME := aster7
 PRODUCT_DEVICE := imx51_aster7
